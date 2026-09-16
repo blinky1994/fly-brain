@@ -1,0 +1,20 @@
+# Machine-local Python environments and caches
+.venv/
+.venv-body/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Downloaded neural data, body assets, generated runs, and checkpoints
+data/
+
+# Local credentials and editor/system files
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
