@@ -16,11 +16,11 @@ to move a knife from scratch, and it does not see the scene through a camera.
 
 ## 1. Open the project
 
-Open **PowerShell** or a PowerShell tab in **Windows Terminal**. Copy this line,
+Open **Git Bash** (or a Git Bash tab in **Windows Terminal**). Copy this line,
 paste it, and press Enter:
 
-```powershell
-cd "C:\Users\user\Desktop\Workspace\fly"
+```bash
+cd /c/Users/user/Desktop/Workspace/fly
 ```
 
 All the commands below assume you have done that. Copy only the lines inside
@@ -37,13 +37,16 @@ runs do not compete for your computer's resources.
 connection strengths. Starting without one resets learning to the untrained
 state, even when old sessions exist on disk.
 
-After opening the project as above, paste this whole block into PowerShell:
+After opening the project as above, paste this whole block into Git Bash:
 
-```powershell
-$checkpoint = Get-ChildItem ".\data\experiments\outcome_training" -Filter latest.npz -Recurse -File | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-if ($null -eq $checkpoint) { throw "No saved outcome-training checkpoint found. Use the fresh-start command below first." }
-Write-Host "Continuing from:" $checkpoint.FullName
-.\.venv-body\Scripts\python.exe train_onion.py --checkpoint "$($checkpoint.FullName)" --episodes 24 --speed 4
+```bash
+checkpoint=$(find ./data/experiments/outcome_training -type f -name latest.npz -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -n 1 | cut -d ' ' -f 2-)
+if [ -n "$checkpoint" ]; then
+  printf 'Continuing from: %s\n' "$checkpoint"
+  ./.venv-body/Scripts/python.exe train_onion.py --checkpoint "$checkpoint" --episodes 24 --speed 4
+else
+  echo "No saved outcome-training checkpoint found. Use the fresh-start command below first."
+fi
 ```
 
 This finds the most recently saved checkpoint in the normal outcome-training
@@ -58,8 +61,8 @@ If you used a custom output folder, or want a particular saved run, pass that
 checkpoint explicitly. For example, this resumes the verified 16-episode run
 included in this folder:
 
-```powershell
-.\.venv-body\Scripts\python.exe train_onion.py --checkpoint ".\data\experiments\outcome_validation_2\latest.npz" --episodes 24 --speed 4
+```bash
+./.venv-body/Scripts/python.exe train_onion.py --checkpoint "./data/experiments/outcome_validation_2/latest.npz" --episodes 24 --speed 4
 ```
 
 The automatic selection chooses the **newest**, not necessarily the best,
@@ -69,11 +72,52 @@ checkpoint. Check a session's `report.json` when comparing results.
 
 To watch the fly learn from untrained connections:
 
-```powershell
-.\.venv-body\Scripts\python.exe train_onion.py --episodes 24 --speed 4
+```bash
+./.venv-body/Scripts/python.exe train_onion.py --episodes 24 --speed 4
 ```
 
 This preserves your old files. It simply does not load their learned weights.
+
+### Watch actual training slowly
+
+To see the learning attempts clearly, start a fresh session at half-speed body
+playback. From the project folder in **Git Bash**, run:
+
+```bash
+./.venv-body/Scripts/python.exe train_onion.py --episodes 24 --speed 0.5 --exit-after-training
+```
+
+Close older viewer windows first so you do not confuse their completed
+demonstrations with the new training session.
+
+The new window shows **six baseline trials first**, then **24 actual training
+episodes**, then **six evaluation trials**. It closes automatically afterwards.
+Baseline is not training, so seeing the fly hold still at the beginning is normal.
+The half-speed setting slows body playback; it does not change the learning rule
+or simulation timestep.
+
+Look for these signs while watching:
+
+- **Phase: `training`** in the viewer, and **`learning: true`** in the terminal:
+  learning is enabled for this attempt.
+- **Exploration**: the fly is trying the opposite of its current decision.
+- **Reward**: the score from the physical attempt, such as `+1` for a held cut.
+- **Connections updated** in the viewer, or **`connections_changed`** in the log:
+  a positive number confirms that connection strengths actually changed.
+
+Not every training attempt changes weights. Holding does not update them, and
+some weights may already have reached their limits. Learning changes the
+chop/hold decision; the leg movements remain programmed.
+
+If you see **`complete - evaluation only`**, **`learning: false`**, and an episode
+counter continuing above 24 in another run, it is repeating demonstrations,
+not continuing to train. Those terminal records are normal logs, not errors.
+The command above avoids that endless demonstration phase.
+
+This command deliberately starts **untrained**, making the change in behavior
+easier to see. It preserves previous saves. To continue existing learning instead,
+add `--checkpoint` with a saved checkpoint path as described in section 2; a model
+that already solves the task may show little or no further change.
 
 ## 4. What you will see
 
@@ -109,6 +153,7 @@ the last completed checkpoint remains on disk.
 
 | Option | Meaning |
 | --- | --- |
+| `--speed 0.5` | Target half-speed body playback to make training attempts easier to follow. |
 | `--speed 1` | Target normal simulated-time playback for the body. |
 | `--speed 4` | Target four-times-speed body playback; the default. |
 | `--speed 0` | Keep the viewer, but remove deliberate playback delays. Zero means maximum speed here. |
@@ -118,19 +163,22 @@ the last completed checkpoint remains on disk.
 
 For maximum speed while watching a **fresh** run:
 
-```powershell
-.\.venv-body\Scripts\python.exe train_onion.py --episodes 24 --speed 0
+```bash
+./.venv-body/Scripts/python.exe train_onion.py --episodes 24 --speed 0
 ```
 
 For faster **continued** training without a window, use the same checkpoint
-selection block from section 2, but replace its last line with:
+selection block from section 2, but replace the `train_onion.py` command inside
+the `if` block with:
 
-```powershell
-.\.venv-body\Scripts\python.exe train_onion.py --checkpoint "$($checkpoint.FullName)" --episodes 60 --headless
+```bash
+./.venv-body/Scripts/python.exe train_onion.py --checkpoint "$checkpoint" --episodes 60 --headless
 ```
 
-The `$checkpoint` variable exists only in the PowerShell session where you ran
-the selection block. In a new terminal, run that block's first three lines again.
+The `$checkpoint` variable exists only in the Bash session where you ran the
+selection block. In a new terminal, use the complete section 2 block with the
+training command replaced as shown above. Keep the `if` check so an empty
+checkpoint path never starts a run.
 
 The speed setting controls waiting between body movements. It cannot make an
 expensive brain or physics calculation instantaneous. Actual playback speed is
@@ -238,8 +286,8 @@ cooking skill, and the test positions still map to the same two cues.
 To only watch a saved model, without training it, this command uses the verified
 checkpoint. Replace its checkpoint path to watch another run:
 
-```powershell
-.\.venv-body\Scripts\python.exe malecns_onion.py watch --physical --checkpoint ".\data\experiments\outcome_validation_2\latest.npz"
+```bash
+./.venv-body/Scripts/python.exe malecns_onion.py watch --physical --checkpoint "./data/experiments/outcome_validation_2/latest.npz"
 ```
 
 That is a separate demonstration viewer. Its older keyboard controls do not
