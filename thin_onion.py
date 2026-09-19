@@ -61,7 +61,9 @@ def add_face(spec, body, name, radius, y, side):
 
 
 class ThinOnion(PhysicalOnion):
-    def __init__(self):
+    def __init__(self,slices=3):
+        if slices not in [3,5]:
+            raise ValueError("Supported slicing curricula have three or five cuts")
         self.thin_ready = False
         super().__init__()
         spec = self.world.mjcf_root
@@ -69,9 +71,11 @@ class ThinOnion(PhysicalOnion):
         for name in ["onion_left","onion_right"]:
             self.world.world_dof_neutral_states.discard(name+"_free")
             spec.delete(next(b for b in spec.bodies if b.name == name))
-        # Five strokes produce five thin end slices and leave a grippable heel.
-        self.boundaries = np.array([-0.28,-0.21,-0.14,-0.07,0,0.07,0.28])
-        self.slice_width = 0.07
+        # A short curriculum leaves a grippable heel. Five cuts are a harder task.
+        self.path_xy[1]=-.1
+        self.path_xy[0]-=.15
+        self.boundaries = np.r_[-.28+.05*np.arange(slices+1),.28]
+        self.slice_width = 0.05
         self.cut_planes = self.boundaries[1:-1]
         # A prepared half onion rests on its flat face, as for controlled slicing.
         self.radius[2]=.36
@@ -95,25 +99,32 @@ class ThinOnion(PhysicalOnion):
                 spec.add_equality(name=f"slice_seam{i-1}",type=mj.mjtEq.mjEQ_WELD,
                                   objtype=mj.mjtObj.mjOBJ_BODY,name1=self.piece_names[i-1],
                                   name2=name,solref=[0.0005,1])
-        # Longitudinal skin striations on the ellipsoid exterior. No contact mass.
+        # Fine curved skin striations share one visual mesh per piece.
+        # Combining them avoids thousands of individual MuJoCo geometries.
         for i,(lo,hi) in enumerate(zip(self.boundaries[:-1],self.boundaries[1:])):
             body = next(b for b in spec.bodies if b.name == self.piece_names[i])
-            for j,a in enumerate(np.linspace(0,np.pi,28)):
-                ys = np.linspace(max(lo,-.279),min(hi,.279),8)
-                for k,(ya,yb) in enumerate(zip(ys[:-1],ys[1:])):
-                    pts=[]
-                    for y in [ya,yb]:
+            vertices,faces=[],[]
+            for a in np.linspace(.01,np.pi-.01,32):
+                ys=np.linspace(max(lo,-.2799),min(hi,.2799),10)
+                for ya,yb in zip(ys[:-1],ys[1:]):
+                    start=len(vertices)
+                    for y,angle in [(ya,a-.0015),(yb,a-.0015),(yb,a+.0015),(ya,a+.0015)]:
                         scale=np.sqrt(max(0,1-(y/.28)**2))
-                        pts.extend([.3203*scale*np.cos(a),y,.3603*scale*np.sin(a)])
-                    body.add_geom(name=f"skin_{i}_{j}_{k}",type=mj.mjtGeom.mjGEOM_CAPSULE,
-                                  fromto=pts,size=[.0007]*3,rgba=[.65,.27,.36,1],mass=0,
-                                  contype=0,conaffinity=0)
+                        vertices.append([.32015*scale*np.cos(angle),y,.36015*scale*np.sin(angle)])
+                    faces.extend([[start,start+1,start+2],[start,start+2,start+3]])
+            name=f"skin_detail_{i}"
+            spec.add_mesh(name=name,uservert=np.array(vertices).ravel(),userface=np.array(faces).ravel())
+            body.add_geom(name=name,type=mj.mjtGeom.mjGEOM_MESH,meshname=name,
+                          rgba=[.57,.22,.32,1],mass=0,contype=0,conaffinity=0)
         for geom in spec.geoms:
             if geom.name == "blade":
                 geom.size = [.34,.004,.16]
                 geom.rgba = [.81,.85,.88,1]
             if geom.name == "board":
                 geom.rgba = [.64,.43,.25,1]
+                geom.friction = [.8,.002,.0001]
+            if geom.name == "holding_pad":
+                geom.friction = [1.2,.005,.001]
         self.world._neutral_keyframe.qpos=[]
         self.world._rebuild_neutral_keyframe()
         self.model,self.data = self.world.compile()
@@ -131,17 +142,18 @@ class ThinOnion(PhysicalOnion):
         self.thin_ready=True
         self.reset()
 
-    def solve_slice_pose(self,target):
+    def solve_slice_pose(self,target,orientation=None):
         probe=mj.MjData(self.model)
         mj.mj_resetDataKeyframe(self.model,probe,self.key)
         lower=self.model.jnt_range[self.joints,0]+.001
         upper=self.model.jnt_range[self.joints,1]-.001
+        desired=np.eye(3) if orientation is None else orientation
         def residual(q):
             probe.qpos[self.qadr]=q
             mj.mj_forward(self.model,probe)
             rotation=probe.site_xmat[self.edge].reshape(3,3)
             return np.r_[probe.site_xpos[self.edge]-target,
-                         .04*(rotation-np.eye(3)).ravel(),.001*(q-self.neutral)]
+                         .3*(rotation[:,1]-desired[:,1]),1.0*rotation[2,0],.0001*(q-self.neutral)]
         fit=least_squares(residual,np.clip(self.neutral,lower,upper),bounds=(lower,upper),max_nfev=250)
         if np.linalg.norm(residual(fit.x)[:3]) > .06:
             raise RuntimeError("Slicing target is outside the reachable knife workspace")
@@ -167,6 +179,7 @@ class ThinOnion(PhysicalOnion):
         self.fracture_enabled=True
         self.seam_work=np.zeros(len(self.seams))
         self.events=[]
+        self.failure_reason=None
         self.cut=False
         self.current_pad_force=0.0
         self.first_pad_contact=None
@@ -175,42 +188,87 @@ class ThinOnion(PhysicalOnion):
         self.aim_samples=[]
         self.previous=self.data.site_xpos[self.edge].copy()
         self.stroke_index=0
+        self.planned_stroke=-1
+        self.min_depth=np.full(len(self.seams),np.inf)
         self.stroke_time=0
         self.elapsed=0
         self.cycle=0.35+self.profile["descent"]+0.4
-        self.duration=0.8+len(self.seams)*self.cycle+0.3
+        self.start_cut=1.5
+        self.duration=self.start_cut+len(self.seams)*self.cycle+0.3
         key=(float(offset),*(float(self.profile[k]) for k in ["aim_bias","descent","press"]))
         if key not in self.pose_cache:
-            raised,lowered=[],[]
-            for y in self.cut_planes+offset+self.profile["aim_bias"]:
-                raised.append(self.solve_slice_pose([self.path_xy[0],y,self.top_z+0.20]))
-                lowered.append(self.solve_slice_pose([self.path_xy[0],y,self.board_z+0.008]))
-            target=np.array([self.path_xy[0],offset+0.19,self.board_z+.36*np.sqrt(1-(.19/.28)**2)+0.07-self.profile["press"]])
-            self.pose_cache[key]=(raised,lowered,self.solve_left(target))
-        self.stroke_raised,self.stroke_lowered,self.left_hold=self.pose_cache[key]
+            paths=[]
+            for y in self.path_xy[1]+self.cut_planes+offset+self.profile["aim_bias"]*np.arange(len(self.seams))/4:
+                # Only clearance poses are needed before each feedback plan.
+                up=self.solve_slice_pose([self.path_xy[0],y,self.top_z+.07])
+                paths.append(np.array([up,up]))
+            target=np.array([self.path_xy[0],self.path_xy[1]+offset+0.12,self.board_z+.36*np.sqrt(1-(.12/.28)**2)+0.07-self.profile["press"]])
+            hover=target.copy(); hover[2]=self.board_z+.55
+            neutral_tip=self.data.site_xpos[self.pad_site].copy()
+            lifted_tip=neutral_tip.copy(); lifted_tip[2]=hover[2]
+            left_targets=np.vstack([np.linspace(neutral_tip,lifted_tip,5),
+                                    np.linspace(lifted_tip,hover,9)[1:],np.linspace(hover,target,7)[1:]])
+            left_path=np.array([self.solve_left(point) for point in left_targets])
+            self.pose_cache[key]=(paths,left_path)
+        self.stroke_paths,self.left_path=self.pose_cache[key]
+        self.left_hold=self.left_path[-1].copy()
+        self.stroke_raised=[path[0] for path in self.stroke_paths]
+        self.stroke_lowered=[path[-1] for path in self.stroke_paths]
 
     def step(self,t,chop=True):
+        if self.failure_reason is not None:
+            return
         self.elapsed=float(t)
-        index=int(np.clip((t-.8)//self.cycle,0,len(self.seams)-1))
-        local=max(0,t-.8-index*self.cycle)
+        index=int(np.clip((t-self.start_cut)//self.cycle,0,len(self.seams)-1))
+        local=max(0,t-self.start_cut-index*self.cycle)
         self.stroke_index=index
         self.stroke_time=local
+        if t >= self.start_cut and index != self.planned_stroke:
+            try:
+                # Engineered geometric feedback: retarget to the physical remainder.
+                # Joint trajectories follow this plan; the learner chooses its bias,
+                # speed, and pressure. This is not visual perception or neural IK.
+                body=self.piece_bodies[index+1]
+                rotation=self.data.xmat[body].reshape(3,3).copy()
+                origin=self.data.xpos[body].copy()
+                y=self.cut_planes[index]+self.profile["aim_bias"]*index/4
+                self.stroke_paths=list(self.stroke_paths)
+                self.stroke_paths[index]=np.array([self.solve_slice_pose(origin+rotation@[0,y,z],rotation)
+                    for z in np.linspace(.43,.005,13)])
+                self.stroke_raised[index]=self.stroke_paths[index][0]
+                self.stroke_lowered[index]=self.stroke_paths[index][-1]
+                heel=self.piece_bodies[-1]
+                hold=self.data.xpos[heel]+self.data.xmat[heel].reshape(3,3)@np.array(
+                    [0,.12,.36*np.sqrt(1-(.12/.28)**2)+.07-self.profile["press"]])
+                self.left_hold=self.solve_left(hold)
+                self.planned_stroke=index
+            except RuntimeError as exc:
+                self.failure_reason=str(exc)
+                return
         up,down=self.stroke_raised[index],self.stroke_lowered[index]
-        if t < .8:
+        def follow(fraction):
+            p=smooth(fraction)*(len(self.stroke_paths[index])-1)
+            k=min(int(p),len(self.stroke_paths[index])-2)
+            return self.stroke_paths[index][k]+(p-k)*(self.stroke_paths[index][k+1]-self.stroke_paths[index][k])
+        if t < self.start_cut:
             right=self.neutral+smooth(t/.7)*(self.stroke_raised[0]-self.neutral)
         elif local < .35:
             start=self.stroke_raised[max(0,index-1)]
             right=start+smooth(local/.35)*(up-start)
         elif local < .35+self.profile["descent"] and chop:
-            right=up+smooth((local-.35)/self.profile["descent"])*(down-up)
+            right=follow((local-.35)/self.profile["descent"])
         else:
-            right=(down+smooth((local-.35-self.profile["descent"])/.4)*(up-down)) if chop else up
+            right=follow(1-(local-.35-self.profile["descent"])/.4) if chop else up
         self.data.ctrl[self.indices]=right
-        self.data.ctrl[self.left_indices]=(self.left_neutral+smooth(t/.6)*(self.left_hold-self.left_neutral)
-                                          if self.hold_enabled else self.left_neutral)
+        phase=smooth(t/1.2)*(len(self.left_path)-1)
+        k=min(int(phase),len(self.left_path)-2)
+        left=self.left_path[k]+(phase-k)*(self.left_path[k+1]-self.left_path[k])
+        if t>=1.2:
+            left=self.left_hold
+        self.data.ctrl[self.left_indices]=left if self.hold_enabled else self.left_neutral
         for body in self.piece_bodies:
             self.data.xfrc_applied[body,:]=0
-        if .7 <= t < .75:
+        if 1.3 <= t < 1.35:
             self.data.xfrc_applied[self.piece_bodies[-1],0]=self.nudge
         for _ in range(self.substeps):
             mj.mj_step(self.model,self.data)
@@ -234,6 +292,7 @@ class ThinOnion(PhysicalOnion):
                 if pair=={self.blade_geom,self.pad_geom}:
                     hazard+=normal
             edge=self.data.site_xpos[self.edge].copy()
+            self.min_depth[index]=min(self.min_depth[index],float(edge[2]-self.board_z))
             dz=max(0,float(self.previous[2]-edge[2]))
             remainder=self.piece_bodies[index+1]
             rotation=self.data.xmat[remainder].reshape(3,3)
@@ -262,11 +321,15 @@ class ThinOnion(PhysicalOnion):
                     self.events.append(dict(seam=index,time_s=float(self.data.time),alignment_error_mm=distance,
                         tilt_degrees=float(np.degrees(tilt)),pad_force=pad,slip_mm=drift,blade_force=blade,
                         thickness_mm=float(self.boundaries[index+1]-self.boundaries[index]),
-                        contact_work=float(self.seam_work[index]),full_depth=False))
+                        contact_work=float(self.seam_work[index]),full_depth=False,
+                        pad_force_at_full_depth=None,slip_at_full_depth_mm=None))
                     self.cut=True
+            highest_edge_z=edge[2]+.34*abs(self.data.site_xmat[self.edge].reshape(3,3)[2,0])
             for event in self.events:
-                if event["seam"]==index and edge[2] <= self.board_z+.045 and dz > 0:
+                if event["seam"]==index and not event["full_depth"] and highest_edge_z <= self.board_z+.045 and dz > 0:
                     event["full_depth"]=True
+                    event["pad_force_at_full_depth"]=pad
+                    event["slip_at_full_depth_mm"]=drift
             self.previous=edge
         mj.mj_forward(self.model,self.data)
         if not np.isfinite(self.data.qpos).all() or np.max(np.abs(self.data.qvel))>1e6:
@@ -278,8 +341,11 @@ class ThinOnion(PhysicalOnion):
                   if not self.data.eq_active[self.seams[i]]
                   and (i==0 or not self.data.eq_active[self.seams[i-1]])]
         clean=[e for e in self.events if e["seam"] in detached and e["full_depth"] and e["alignment_error_mm"] <= .018
-               and e["tilt_degrees"] <= 8 and e["pad_force"]>.001 and e["slip_mm"]<.08]
-        return dict(slices_detached=len(detached),clean_slices=len(clean),target_slices=len(self.seams),
+               and e["tilt_degrees"] <= 8 and e["pad_force"]>.001 and e["slip_mm"]<.08
+               and e["pad_force_at_full_depth"]>.001 and e["slip_at_full_depth_mm"]<.08]
+        if self.failure_reason is not None:
+            clean=[]
+        return dict(failure_reason=self.failure_reason,slices_detached=len(detached),clean_slices=len(clean),target_slices=len(self.seams),
                     seams_broken=len(self.events),events=self.events,peak_blade_force=self.peak_force,
                     blade_foot_force=self.peak_hazard,max_remainder_slip_mm=self.max_slip,
                     pad_contact_s=self.pad_contact_s,target_thickness_mm=self.slice_width,

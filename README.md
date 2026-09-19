@@ -10,9 +10,38 @@ training checkpoints.
 This project runs a simulated fly, knife, and onion. You can watch the fly try
 actions, receive a score from the physical result, and change its future decisions.
 
-**What it learns today:** whether to chop or hold still for two kinds of onion
-position. The leg movements are already programmed. It is not yet learning how
-to move a knife from scratch, and it does not see the scene through a camera.
+**There are now two training lessons:** the original chop/hold decision and a
+new thin-slicing motor lesson. Neither learns from camera images or discovers
+joint movements from scratch.
+
+## New: train clean thin slices
+
+From this project folder in **Git Bash**:
+
+```bash
+./.venv-body/Scripts/python.exe train_slicing.py --episodes 12 --speed 0.5
+```
+
+This lesson starts with **three consecutive 0.05 mm slices in the miniature
+simulation**. It learns which aim correction, cutting speed, and holding pressure
+produce better physical results. The onion has separate physical pieces and
+visible layers. A detached piece only counts as clean after a complete, aligned,
+held cut with limited slip. This uses an engineered quality proxy, not measured
+onion tissue behavior.
+
+Add `--continuous` to train in blocks while the viewer stays open. Each block
+includes evaluation with learning off, then training resumes. Closing the viewer
+stops the session and keeps the latest completed update. Without `--continuous`,
+the window closes after the final evaluation. Use `--headless` for faster runs.
+
+**Slicing saves `latest.json` under `data/experiments/slicing_training`.** These
+are motor-policy checkpoints, separate from the old neural `latest.npz` files.
+The new lesson chooses among supplied movement profiles; it does not update
+MaleCNS synapses. Slice thickness comes from preset fracture boundaries.
+
+See [SLICING_TRAINING.md](SLICING_TRAINING.md) for resuming, speed keys, physical
+checks, and limitations. The experimental five-slice curriculum is a harder,
+separate task. The rest of this README explains the original chop/hold lesson.
 
 ## 1. Open the project
 
@@ -333,6 +362,10 @@ asking for help; do not delete your checkpoints to troubleshoot.
 
 | File or folder | Role |
 | --- | --- |
+| `train_slicing.py` | Live or headless thin-slice motor training, including continuous mode. |
+| `thin_onion.py` | Layered physical slices, straight-path control, and cut-quality measurements. |
+| `slicing_policy.py` | Learns which motor profile gets the best physical reward; saves JSON checkpoints. |
+| `check_slicing.py` | Physical controls and before/after renders for a slicing checkpoint. |
 | `train_onion.py` | Main entry point for outcome training and its viewer. |
 | `onion_outcome.py` | Reward rules and the weight-update calculation. |
 | `malecns_onion_brain.py` | Neural worker, decisions, caching, and checkpoints. |
