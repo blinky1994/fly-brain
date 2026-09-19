@@ -1,8 +1,9 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
 import numpy as np
-from slicing_policy import SlicingPolicy,PROFILES,slice_reward
+from slicing_policy import SlicingPolicy,PROFILES,TRAIN_OFFSETS,slice_reward
 
 
 class SlicingPolicyTests(unittest.TestCase):
@@ -30,15 +31,47 @@ class SlicingPolicyTests(unittest.TestCase):
         previous=policy.counts.copy()
         policy.choose(False)
         np.testing.assert_array_equal(policy.counts,previous)
+        # Complete coverage so subsequent choices exercise saved RNG state.
+        for _ in range(len(PROFILES)*(len(TRAIN_OFFSETS)-1)):
+            action,_=policy.choose(True)
+            policy.update(action,.9 if action==2 else -.2)
         with tempfile.TemporaryDirectory() as folder:
             path=Path(folder)/'latest.json'; policy.save(path)
             resumed=SlicingPolicy(path)
             np.testing.assert_array_equal(resumed.counts,policy.counts)
             np.testing.assert_array_equal(resumed.values,policy.values)
+            np.testing.assert_array_equal(resumed.context_counts,policy.context_counts)
             self.assertEqual([resumed.choose(True) for _ in range(10)],
                              [policy.choose(True) for _ in range(10)])
             with self.assertRaises(ValueError):
                 SlicingPolicy(path,slices=5)
+
+    def test_every_profile_gets_every_training_position(self):
+        policy=SlicingPolicy()
+        for _ in range(len(PROFILES)*len(TRAIN_OFFSETS)):
+            action,exploring=policy.choose(True)
+            self.assertTrue(exploring)
+            policy.update(action,.5)
+        np.testing.assert_array_equal(policy.context_counts,np.ones((len(PROFILES),len(TRAIN_OFFSETS)),dtype=int))
+
+    def test_appended_profiles_preserve_existing_learning(self):
+        policy=SlicingPolicy()
+        policy.update(0,.5,0)
+        with tempfile.TemporaryDirectory() as folder:
+            path=Path(folder)/'latest.json'
+            policy.save(path)
+            saved=json.loads(path.read_text())
+            for field in ['profiles','counts','values','context_counts']:
+                saved[field]=saved[field][:-1]
+            path.write_text(json.dumps(saved))
+            resumed=SlicingPolicy(path)
+            np.testing.assert_array_equal(resumed.counts,policy.counts)
+            np.testing.assert_array_equal(resumed.values,policy.values)
+            np.testing.assert_array_equal(resumed.context_counts,policy.context_counts)
+            saved['profiles'][0]['press']=999
+            path.write_text(json.dumps(saved))
+            with self.assertRaises(ValueError):
+                SlicingPolicy(path)
 
 
 if __name__=='__main__':

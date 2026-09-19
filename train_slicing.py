@@ -9,14 +9,14 @@ import time
 import numpy as np
 
 from thin_onion import ThinOnion
-from slicing_policy import SlicingPolicy,PROFILES,slice_reward
+from slicing_policy import SlicingPolicy,PROFILES,TRAIN_OFFSETS,slice_reward
 
 ROOT=Path(__file__).resolve().parent
 
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--episodes",type=int,default=12)
+    parser.add_argument("--episodes",type=int,default=len(PROFILES)*len(TRAIN_OFFSETS))
     parser.add_argument("--slices",type=int,choices=[3,5],default=3,help="Start with three; five is a harder curriculum")
     parser.add_argument("--headless",action="store_true")
     parser.add_argument("--speed",type=float,default=1,help="Body playback speed; 0 is maximum")
@@ -38,7 +38,7 @@ def main():
     policy.save(out/"latest.json")
     config={**vars(args),"checkpoint":str(args.checkpoint) if args.checkpoint else None,"output_dir":str(out),
             "scope":"Outcome-trained motor profiles; separate from MaleCNS synaptic learning",
-            "thickness_mm":.05,"profiles":PROFILES}
+            "thickness_mm":.05,"profiles":PROFILES,"training_offsets":TRAIN_OFFSETS}
     (out/"config.json").write_text(json.dumps(config,indent=2))
     print(f"Session: {out}",flush=True)
     print("Building slicing scene...",flush=True)
@@ -67,6 +67,9 @@ def main():
             if viewer and not viewer.is_running():
                 raise InterruptedError
             action,explore=policy.choose(learn=learn)
+            context=policy.context_index(action) if learn else None
+            if learn:
+                offset=TRAIN_OFFSETS[context]
             # Reset and IK planning do not advance physics. Results always come
             # from fresh simulation; only geometric pose solutions are cached.
             with viewer.lock() if viewer else nullcontext():
@@ -92,7 +95,7 @@ def main():
             metrics=scene.metrics()
             reward=slice_reward(metrics)
             if learn:
-                policy.update(action,reward)
+                policy.update(action,reward,context)
                 policy.save(out/"latest.json")
             result=dict(phase=phase,episode=episode,action=action,profile=PROFILES[action],
                         exploratory=explore,learning=learn,reward=reward,offset_mm=offset,nudge=nudge,metrics=metrics)
@@ -129,11 +132,13 @@ def main():
                         trained_episodes=int(policy.counts.sum()),blocks_completed=block+1,
                         best_profile=PROFILES[policy.choose(False)[0]],wall_seconds=time.perf_counter()-started,
                         scope=config["scope"],checkpoint=str(out/"latest.json"),frozen=args.frozen)
+            report["training_position_counts"]=policy.context_counts.tolist()
             (out/"report.json").write_text(json.dumps(report,indent=2))
             print(json.dumps(report),flush=True)
             block+=1
             if not args.continuous:
                 break
+            results[:]=[r for r in results if r["phase"]=="baseline"]
     except (InterruptedError,KeyboardInterrupt):
         print("Stopped; the last completed training episode is saved.",flush=True)
     finally:

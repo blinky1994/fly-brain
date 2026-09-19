@@ -19,7 +19,7 @@ joint movements from scratch.
 From this project folder in **Git Bash**:
 
 ```bash
-./.venv-body/Scripts/python.exe train_slicing.py --episodes 12 --speed 0.5
+./.venv-body/Scripts/python.exe train_slicing.py --episodes 21 --speed 0.5
 ```
 
 This lesson starts with **three consecutive 0.05 mm slices in the miniature
