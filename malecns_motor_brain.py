@@ -11,6 +11,7 @@ from pathlib import Path
 import sys
 import numpy as np
 from malecns_probe import Brain, ROOT
+from neuron_activity import spike_frame, write_atlas
 
 
 class MotorBrain:
@@ -121,7 +122,7 @@ class MotorBrain:
         self.silence = bool(silence)
         return dict(candidate=bool(learn),cached_response=False)
 
-    def act(self,observation):
+    def act(self,observation,capture_activity=False):
         if self.pending is None:
             raise ValueError('Begin a neural trial first')
         obs = np.asarray(observation,dtype=float)
@@ -151,9 +152,20 @@ class MotorBrain:
         action = np.tanh(self.rates[self.readout[:,0]]-self.rates[self.readout[:,1]])
         if self.silence:
             action[:] = 0
-        return dict(action=action.tolist(),window_ms=20,spikes=int(counts.sum()),
+        result = dict(action=action.tolist(),window_ms=20,spikes=int(counts.sum()),
                     motor_spikes=int(counts[self.motor_neurons].sum()),
                     motor_activity=group_activity.tolist(),cached_response=False)
+        if capture_activity:
+            result.update(spike_frame(self.brain.neurons.bodyId.to_numpy(),counts,
+                                      self.brain.clock*self.brain.dt))
+        return result
+
+    def viewer_atlas(self,path):
+        path=Path(path).resolve()
+        if not path.is_relative_to(ROOT.resolve()):
+            raise ValueError('Write viewer data inside this project')
+        sensors=np.unique(np.concatenate(self.sensor_groups+self.tactile))
+        return write_atlas(self.brain.neurons,self.motor_neurons,sensors,path)
 
     def finish(self,reward,reference=False):
         if self.pending is None or not np.isfinite(reward):
@@ -218,7 +230,7 @@ def main():
                                              for name,(p,n) in zip(brain.motor_names,brain.readout)],
                               proprioceptor_body_ids=[brain.brain.neurons.bodyId.iloc[g].tolist() for g in brain.sensor_groups],
                               learning='reward search of existing motor-input efficacies; annotated motor readout')
-            elif brain is None or op not in ['begin','act','finish','save']:
+            elif brain is None or op not in ['begin','act','finish','save','viewer_atlas']:
                 raise ValueError('Unknown operation or uninitialized brain')
             else:
                 result = getattr(brain,op)(**req)

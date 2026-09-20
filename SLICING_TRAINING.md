@@ -1,5 +1,10 @@
 # Learn thin slicing before knife pickup
 
+**Historical comparison only:** this movement-profile learner does not use
+MaleCNS. The current connectome-driven work is described in
+[CONNECTOME_TRAINING.md](CONNECTOME_TRAINING.md). Its learning results must be
+evaluated separately; the 9/9 result below belongs only to this older setup.
+
 This is a new motor-training lesson. It chooses cutting settings based on the
 physical result. The earlier `train_onion.py` still trains the separate binary
 chop/hold decision; adding more episodes there cannot teach slicing.

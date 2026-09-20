@@ -38,6 +38,7 @@ class MotorViewer:
         return not glfw.window_should_close(self.window)
 
     def sync(self,environment):
+        glfw.make_context_current(self.window)
         glfw.poll_events()
         if self.revision!=environment.revision:
             if self.context:
@@ -54,11 +55,12 @@ class MotorViewer:
         mj.mjv_updateScene(environment.model,environment.data,self.option,None,self.camera,
                            mj.mjtCatBit.mjCAT_ALL,self.scene)
         mj.mjr_render(viewport,self.scene,self.context)
-        mj.mjr_overlay(mj.mjtFontScale.mjFONTSCALE_150,mj.mjtGridPos.mjGRID_TOPLEFT,
+        mj.mjr_overlay(mj.mjtFont.mjFONT_NORMAL,mj.mjtGridPos.mjGRID_TOPLEFT,
                        viewport,self.text,'',self.context)
         glfw.swap_buffers(self.window)
 
     def close(self):
+        glfw.make_context_current(self.window)
         if self.context:
             self.context.free()
         glfw.destroy_window(self.window)

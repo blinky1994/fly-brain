@@ -59,6 +59,22 @@ class ConnectomeMotorTests(unittest.TestCase):
             np.testing.assert_array_equal(b.act(np.zeros(22))['action'],resumed.act(np.zeros(22))['action'])
             b.finish(0); resumed.finish(0)
 
+    def test_viewer_telemetry_is_read_only_and_matches_actual_spikes(self):
+        b=self.brain
+        before=b.brain.weights.data[b.positions].copy()
+        b.begin()
+        plain=[b.act(np.zeros(22)) for _ in range(10)]
+        b.finish(0)
+        b.begin()
+        recorded=[b.act(np.zeros(22),capture_activity=True) for _ in range(10)]
+        b.finish(0)
+        motors=set(b.brain.neurons.bodyId.iloc[b.motor_neurons].tolist())
+        for p,r in zip(plain,recorded):
+            self.assertEqual(p['action'],r['action'])
+            self.assertEqual(sum(count for _,count in r['neuron_spikes']),r['spikes'])
+            self.assertEqual(sum(count for cell,count in r['neuron_spikes'] if cell in motors),r['motor_spikes'])
+        np.testing.assert_array_equal(before,b.brain.weights.data[b.positions])
+
 
 if __name__=='__main__':
     unittest.main()

@@ -10,11 +10,45 @@ training checkpoints.
 This project runs a simulated fly, knife, and onion. You can watch the fly try
 actions, receive a score from the physical result, and change its future decisions.
 
-**There are now two training lessons:** the original chop/hold decision and a
-new thin-slicing motor lesson. Neither learns from camera images or discovers
-joint movements from scratch.
+## First movement lesson: reaching
 
-## New: train clean thin slices
+The connectome trainer now starts with **reaching a green target**, before holding
+or slicing. It uses actual MaleCNS motor-neuron activity and rewards a closer,
+sustained knife-tip reach. Success is checked with learning turned off; moving
+legs alone does not count. This is a fixed-target lesson, not learned vision.
+See [CONNECTOME_TRAINING.md](CONNECTOME_TRAINING.md) for Bash commands, resuming,
+the success criteria, and the older `--lesson slice` mode.
+
+## Current work: connectome-driven movement learning
+
+Use **`train_connectome.py`** for the current work. It runs the full selected
+MaleCNS graph, reads annotated front-leg motor-neuron activity, and trains
+existing internal neural efficacies from physical feedback. It has no library
+of chopping movements. The onion starts as one physical object; cut pieces
+are created only after a contact-driven stroke crosses it.
+
+In **Git Bash**, start headless training from the current local checkpoint:
+
+```bash
+./.venv-body/Scripts/python.exe train_connectome.py --headless --episodes 100 --seconds 2 --checkpoint ./data/experiments/connectome_motor_validation_2/latest.npz
+```
+
+Omit `--checkpoint` for a fresh run. This command automatically starts the
+neural worker using `.venv`; the body runs in `.venv-body`.
+**This mode has demonstrated neural control and small movement-score improvements,
+not learned onion slicing yet.** The body mapping and neuron dynamics remain
+modeling assumptions. See [CONNECTOME_TRAINING.md](CONNECTOME_TRAINING.md) for
+resuming, what learns, and the verified limits.
+
+**Neuron viewer:** add `--neurons` to a non-headless `train_connectome.py` run.
+It opens a second window showing actual per-neuron activity from the same worker,
+including the nerve cord and the leg motor neurons. See
+[NEURON_VIEWER.md](NEURON_VIEWER.md) for controls and resume commands.
+
+The older lessons below are retained as separate experiments. Their successful
+scripted movements are not evidence that MaleCNS learned those movements.
+
+## Older comparison: movement-profile thin slicing (does not use MaleCNS)
 
 From this project folder in **Git Bash**:
 
