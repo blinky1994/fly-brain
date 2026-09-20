@@ -1,4 +1,4 @@
-# Watch the neurons driving onion training
+# Watch the neurons driving bench-press training
 
 The neuron window reads the **same MaleCNS worker that commands the fly**.
 It does not start FLYBOARD's separate simulator, generate synthetic activity,
@@ -11,7 +11,7 @@ See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and the retained MIT licens
 From the prepared project folder in Git Bash:
 
 ```bash
-checkpoint=$(find ./data/experiments/connectome_motor -type f -name latest.npz -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -n 1 | cut -d ' ' -f 2-)
+checkpoint=$(find ./data/experiments/bench_press -type f -name latest.npz -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -n 1 | cut -d ' ' -f 2-)
 if [ -n "$checkpoint" ]; then
   ./.venv-body/Scripts/python.exe train_connectome.py --neurons --continuous --episodes 12 --seconds 2 --checkpoint "$checkpoint"
 else
@@ -63,7 +63,7 @@ speed keys apply only to body playback; 1/2/3 mean filters in the neuron window.
   clears activity. If no fresh frame arrives for three wall-clock seconds, glow
   clears and the window says it is waiting. Closing the worker closes the display.
 
-Movement learning is still experimental and has not demonstrated learned slicing.
+Movement learning is experimental; use the frozen bench evaluations to assess lifting.
 The orange activity is from our spiking simulation, not recordings of a living fly.
 
 ## Record without opening windows

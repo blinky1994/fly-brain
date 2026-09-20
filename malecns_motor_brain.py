@@ -15,7 +15,7 @@ from neuron_activity import spike_frame, write_atlas
 
 
 class MotorBrain:
-    def __init__(self, motor_names, observation_size, checkpoint=None, seed=41):
+    def __init__(self, motor_names, observation_size, checkpoint=None, seed=41, sensory_gain=None):
         self.brain = Brain()
         b = self.brain
         self.motor_names = list(motor_names)
@@ -23,6 +23,10 @@ class MotorBrain:
         if self.observation_size != 22:
             raise ValueError('Expected the version-1 physical sensor interface')
         self.seed = seed
+        # Explicit calibration of engineered proprioceptive current, not a
+        # biological measurement. None restores the checkpoint's calibration.
+        requested_gain = sensory_gain
+        self.sensory_gain = 1. if sensory_gain is None else float(sensory_gain)
         self.rng = np.random.default_rng(seed)
         n = b.neurons
         types = n.type.fillna('').str.strip()
@@ -84,7 +88,9 @@ class MotorBrain:
         self.pending = None
         if checkpoint:
             with np.load(checkpoint,allow_pickle=False) as saved:
-                if str(saved['schema'])!='malecns-direct-motor-v1':
+                if requested_gain is None:
+                    self.sensory_gain = float(saved['sensory_gain']) if 'sensory_gain' in saved else 1.
+                if str(saved['schema']) not in ['malecns-direct-motor-v1','malecns-direct-motor-v2']:
                     raise ValueError('Use a direct-motor checkpoint, not a chop/hold or profile save')
                 if saved['motor_names'].tolist()!=self.motor_names or int(saved['observation_size'])!=observation_size:
                     raise ValueError('Motor/sensor interface mismatch')
@@ -104,6 +110,8 @@ class MotorBrain:
                     raise ValueError('Checkpoint efficacy/gain mismatch')
                 self.rounds, self.accepted = int(saved['rounds']),int(saved['accepted'])
                 self.rng.bit_generator.state = json.loads(str(saved['rng_state']))
+        if not np.isfinite(self.sensory_gain) or not .1 <= self.sensory_gain <= 4:
+            raise ValueError('Sensory gain must be finite and between 0.1 and 4')
         self._apply(self.gains)
 
     def _apply(self,gains):
@@ -134,7 +142,7 @@ class MotorBrain:
         angles=obs[6:20]
         encoded=np.r_[angles[:7],-angles[:7],angles[7:],-angles[7:]]
         for group,value in zip(self.sensor_groups,encoded):
-            drive[group]=16+12*float(np.clip(value,-1,1))
+            drive[group]=self.sensory_gain*(16+12*float(np.clip(value,-1,1)))
         for group in self.tactile:
             drive[group]=30*float(np.clip(obs[-1],0,1))
         counts = np.zeros(self.brain.n,dtype=np.int32)
@@ -204,10 +212,10 @@ class MotorBrain:
         temporary = path.with_suffix('.partial')
         b = self.brain
         with temporary.open('wb') as stream:
-            np.savez_compressed(stream,schema='malecns-direct-motor-v1',motor_groups=self.group_labels,gains=self.gains,
+            np.savez_compressed(stream,schema='malecns-direct-motor-v2',motor_groups=self.group_labels,gains=self.gains,
                 pre_body=b.neurons.bodyId.iloc[self.pre],post_body=b.neurons.bodyId.iloc[self.post],
                 original=self.original,trained=b.weights.data[self.positions],seed=self.seed,
-                motor_names=self.motor_names,observation_size=self.observation_size,
+                motor_names=self.motor_names,observation_size=self.observation_size,sensory_gain=self.sensory_gain,
                 rounds=self.rounds,accepted=self.accepted,rng_state=json.dumps(self.rng.bit_generator.state))
         temporary.replace(path)
         return dict(checkpoint=str(path))
@@ -223,7 +231,7 @@ def main():
                 if brain is not None:
                     raise ValueError('Already initialized')
                 brain = MotorBrain(**req)
-                result = dict(ready=True,neurons=brain.brain.n,connections=brain.brain.graph.nnz,
+                result = dict(ready=True,sensory_gain=brain.sensory_gain,neurons=brain.brain.n,connections=brain.brain.graph.nnz,
                               plastic_connections=len(brain.positions),outputs=len(brain.motor_neurons),
                               motor_groups=brain.group_labels,motor_body_ids=brain.brain.neurons.bodyId.iloc[brain.motor_neurons].tolist(),
                               joint_readout=[dict(joint=name,positive=brain.group_labels[p],negative=brain.group_labels[n])

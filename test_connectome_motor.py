@@ -17,6 +17,24 @@ class ConnectomeMotorTests(unittest.TestCase):
         b.gains[:]=0
         b._apply(b.gains)
         b.best_reward=None
+        b.sensory_gain=1.
+
+    def test_calibrated_sensors_activate_both_sides_and_resume(self):
+        b=self.brain
+        b.sensory_gain=4.
+        b.begin()
+        actions=np.array([b.act(np.zeros(22))['action'] for _ in range(10)])
+        self.assertGreater(np.abs(actions[:,:7]).max(),0)
+        self.assertGreater(np.abs(actions[:,7:]).max(),0)
+        b.finish(0)
+        with tempfile.TemporaryDirectory(dir=ROOT/'data') as folder:
+            path=ROOT/folder/'calibrated.npz'
+            b.save(path)
+            resumed=MotorBrain(self.names,22,path)
+            self.assertEqual(resumed.sensory_gain,4.)
+            b.begin(); resumed.begin()
+            np.testing.assert_array_equal(b.act(np.zeros(22))['action'],resumed.act(np.zeros(22))['action'])
+            b.finish(0); resumed.finish(0)
 
     def test_fresh_motor_spikes_drive_commands_and_ablation_stops_them(self):
         b=self.brain

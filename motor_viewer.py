@@ -1,4 +1,4 @@
-"""MuJoCo window that survives model recompilation when a new cut creates bodies."""
+"""MuJoCo body viewer sharing the desktop with live neural activity."""
 import glfw
 import mujoco as mj
 
@@ -7,15 +7,15 @@ class MotorViewer:
     def __init__(self, scene, speed=1):
         if not glfw.init():
             raise RuntimeError('Cannot initialize the interactive viewer')
-        self.window = glfw.create_window(1200,850,'MaleCNS - intact onion / direct motor learning',None,None)
+        self.window = glfw.create_window(1200,850,'MaleCNS - fly bench press',None,None)
         if not self.window:
             glfw.terminate()
             raise RuntimeError('Cannot open the viewer window')
         glfw.make_context_current(self.window)
         glfw.swap_interval(1)
         self.camera = mj.MjvCamera()
-        self.camera.lookat[:] = [*scene.path_xy,scene.board_z+.18]
-        self.camera.distance,self.camera.azimuth,self.camera.elevation = 2.8,135,-30
+        self.camera.lookat[:] = scene.camera_target
+        self.camera.distance,self.camera.azimuth,self.camera.elevation = 4.5,135,-25
         self.option = mj.MjvOption()
         self.context = self.scene = None
         self.revision = -1

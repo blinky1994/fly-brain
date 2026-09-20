@@ -7,7 +7,7 @@ from pathlib import Path
 import subprocess
 import time
 import numpy as np
-from intact_onion import IntactOnion
+from bench_press import BenchPress
 
 ROOT=Path(__file__).resolve().parent
 
@@ -42,11 +42,12 @@ class MotorClient:
 
 def main():
     p=argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--lesson',choices=['reach','slice'],default='reach',
-                   help='Start with a fixed knife-tip reach; slice retains the older combined objective')
+    p.add_argument('--lesson',choices=['bench'],default='bench')
     p.add_argument('--episodes',type=int,default=12)
     p.add_argument('--seconds',type=float,default=3)
     p.add_argument('--checkpoint',type=Path)
+    p.add_argument('--sensory-gain',type=float,default=None,
+                   help='Proprioceptive-current gain, 0.1 to 4; restores checkpoint or uses 4 for fresh bench runs')
     p.add_argument('--output-dir',type=Path)
     p.add_argument('--headless',action='store_true')
     p.add_argument('--neurons',action='store_true',help='Show live per-neuron activity beside the body viewer')
@@ -56,6 +57,8 @@ def main():
     p.add_argument('--silence-motor-output',action='store_true',help='Ablation: motor spikes cannot command movement')
     p.add_argument('--speed',type=float,default=1)
     args=p.parse_args()
+    if args.sensory_gain is not None and (not np.isfinite(args.sensory_gain) or not .1 <= args.sensory_gain <= 4):
+        p.error('Sensory gain must be between 0.1 and 4')
     if args.episodes<1 or not np.isfinite([args.seconds,args.speed]).all() or args.seconds<.1 or args.speed<0:
         p.error('Use positive episodes/duration and a nonnegative speed')
     if args.continuous and args.headless:
@@ -64,20 +67,16 @@ def main():
         p.error('Use --record-neurons for headless recording, or omit --headless to open the neuron viewer')
     if args.silence_motor_output and not args.frozen:
         p.error('Use --frozen with the motor-output ablation')
-    out=(args.output_dir or ROOT/'data/experiments/connectome_motor'/str(time.time_ns())).resolve()
+    out=(args.output_dir or ROOT/'data/experiments/bench_press'/str(time.time_ns())).resolve()
     if not out.is_relative_to(ROOT) or (out.exists() and any(out.iterdir())):
         p.error('Use a fresh output directory inside this project')
     out.mkdir(parents=True,exist_ok=True)
     config={**vars(args),'checkpoint':str(args.checkpoint) if args.checkpoint else None,'output_dir':str(out),
             'scope':'Full MaleCNS LIF; annotated motor outputs; provisional body mapping; reward-searched internal efficacies',
-            'control_seconds':.1,'neural_ms_per_control':20,'cutting':'custom dynamic planar split; not tissue FEM'}
+            'control_seconds':.1,'neural_ms_per_control':20,'task':'passive guided bar, assisted front-foot grips; lift and hold, no full reps'}
     (out/'config.json').write_text(json.dumps(config,indent=2))
     print('Session:',out,flush=True)
-    if args.lesson == 'reach':
-        from reaching_lesson import ReachingLesson
-        scene=ReachingLesson()
-    else:
-        scene=IntactOnion()
+    scene=BenchPress()
     viewer=None
     neurons=None
     brain=None
@@ -103,6 +102,7 @@ def main():
             return future.result()
 
         metadata=request('init',motor_names=scene.motor_names,observation_size=len(scene.observation()),
+                         sensory_gain=(4. if args.sensory_gain is None and args.checkpoint is None else args.sensory_gain),
                          checkpoint=str(args.checkpoint.resolve()) if args.checkpoint else None)
         (out/'neural_model.json').write_text(json.dumps(metadata,indent=2))
         print(json.dumps(metadata),flush=True)
@@ -122,7 +122,7 @@ def main():
             for command in range(max(1,round(args.seconds/.1))):
                 if viewer:
                     viewer.text=(f'MaleCNS direct motor learning | {phase} {episode}\n'
-                        f'Learning: {learn} | physical pieces: {len(scene.pieces)} | cuts: {len(scene.events)}\n'
+                        f'Learning: {learn} | {scene.status()}\n'
                         'Computing fresh neural activity...\nDrag: orbit | scroll: zoom | 1/2/3/0: speed | close: stop')
                 neural=request('act',observation=scene.observation().tolist(),
                                capture_activity=args.neurons or args.record_neurons)
@@ -141,9 +141,7 @@ def main():
                         if not viewer.running(): raise InterruptedError
                         viewer.text=(f'MaleCNS | {phase} {episode} | learning: {learn}\n'
                             f'Neuron spikes: {neural["spikes"]} | motor spikes: {neural["motor_spikes"]}\n'+
-                            (f'Target distance: {scene.distance():.3f} mm | hold: {scene.dwell:.2f} / .20 s\n'
-                             if args.lesson == 'reach' else
-                             f'Physical pieces: {len(scene.pieces)} | cuts: {len(scene.events)}\n')+
+                            scene.status()+'\n'+
                             'Direct joint commands; no movement library\nDrag: orbit | scroll: zoom | 1/2/3/0: speed')
                         viewer.sync(scene)
                         if neurons: neurons.sync()
@@ -170,10 +168,8 @@ def main():
             evaluation=[trial('evaluation',block*3+i+1,offset=offset) for i,offset in enumerate([0,-.006,.006])]
             report=dict(baseline=baseline,evaluation=evaluation,blocks=block+1,
                         lesson=args.lesson,
-                        reaching_demonstrated=(args.lesson=='reach' and
-                            all(r['physics']['reach_success'] for r in evaluation)),
-                        checkpoint=str(out/'latest.npz'),scope=config['scope'],
-                        clean_slicing_demonstrated=all(r['physics']['clean_slices']>=3 for r in evaluation))
+                        lifting_demonstrated=all(r['physics']['lift_success'] for r in evaluation),
+                        checkpoint=str(out/'latest.npz'),scope=config['scope'])
             (out/'report.json').write_text(json.dumps(report,indent=2))
             print('Report:',out/'report.json',flush=True)
             block+=1
